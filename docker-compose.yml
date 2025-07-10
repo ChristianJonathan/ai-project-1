@@ -1,0 +1,17 @@
+ services:
+   app:
+     build: .
+     ports: ["8000:8000"]
+     environment:
+       LLM_URL: "http://host.docker.internal:11434/api/chat"
+       LLM_MODEL: "qwen3:1.7b"
+       AUTH_USER: "admin"            # <<< set your preferred creds
+       AUTH_PASS: "secret123"
+       RATE_LIMIT: "10/minute"       # <<< 10 requests per minute
+     volumes:
+       - chat-data:/data
+   redis:
+     image: redis:7-alpine
+     ports: ["6379:6379"]            # internal only
+ volumes:
+   chat-data:
