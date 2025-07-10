@@ -1,0 +1,8 @@
+/* --- minimal, tweak later --- */
+body   { font-family: ui-sans-serif, system-ui, sans-serif; line-height:1.5;}
+header { background:#0e7490; color:white; padding:.5rem 1rem; }
+main   { max-width:60rem; margin:1rem auto; padding:0 1rem; }
+.chat-user      { background:#e2e8f0; padding:.5rem 1rem; border-radius:.5rem;}
+.chat-assistant { background:#f0fdf4; padding:.5rem 1rem; border-radius:.5rem;}
+pre.think       { background:#fef9c3; padding:.5rem 1rem; border-radius:.5rem;
+                  font-size:.875rem; white-space:pre-wrap;}

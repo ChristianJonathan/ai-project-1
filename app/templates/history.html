@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chat history</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         background:#f7f8fa;color:#111;margin:0;}
+    header{padding:1rem 1.5rem;border-bottom:1px solid #ddd;background:#fff;
+           display:flex;justify-content:space-between;align-items:center;}
+    header a{color:#2563eb;text-decoration:none;font-size:.85rem}
+    h1{margin:0;font-size:1.2rem}
+    table{width:100%;border-collapse:collapse;margin:1rem auto;max-width:800px;background:#fff}
+    th,td{padding:.6rem 1rem;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}
+    tr:hover{background:#f1f5f9}
+    a{color:#2563eb;text-decoration:none}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Chat history</h1>
+    <a href="/">← Back to chat</a>
+  </header>
+
+  <table>
+    <tr><th>Title (first prompt)</th><th>Turns</th><th>Started</th><th>Download</th></tr>
+    {% for sid, started, title, turns in sessions %}
+      <tr>
+        <td> {% if title %}
+            <a href="/history/{{ sid }}">
+            {{ title[:60] }}{% if title|length>60 %}…{% endif %}
+            </a>
+            {% else %}
+            <em>[empty]</em>
+            {% endif %}</td>
+        <td>{{ turns }}</td>
+        <td>{{ started }}</td>
+        <td>
+          <a href="/export/{{ sid }}">txt</a> |
+          <a href="/export.csv/{{ sid }}">csv</a>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" style="text-align:center">No sessions yet</td></tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

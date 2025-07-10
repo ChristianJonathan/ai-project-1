@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chat history – {{ title or sid[:8] }}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css">  <!-- if you extracted styles -->
+  <style>
+    /* minimal styles so page shows nicely even without separate file */
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         background:#f7f8fa;color:#111;line-height:1.5;margin:0}
+    header{padding:1rem 1.5rem;border-bottom:1px solid #ddd;background:#fff;
+           display:flex;justify-content:space-between;align-items:center;}
+    a{color:#2563eb;text-decoration:none}
+    .wrap{max-width:800px;margin:auto;padding:1.5rem}
+    .msg{padding:.75rem 1rem;border-radius:12px;max-width:90%;margin-bottom:1rem}
+    .user{background:#2563eb;color:#fff;margin-left:auto}
+    .assistant{background:#e5e7eb}
+    .assistant.thought{opacity:.65;font-style:italic}
+    .ts{font-size:.75rem;opacity:.6;margin-top:.25rem}
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <strong>Session:</strong> {{ sid[:8] }} &nbsp;|&nbsp;
+    <strong>Started:</strong> {{ started }}
+  </div>
+  <nav>
+    <a href="/">← Back to chat</a>
+    &nbsp;·&nbsp;
+    <a href="/export/{{ sid }}">Download .txt</a>
+    &nbsp;·&nbsp;
+    <a href="/export.csv/{{ sid }}">Download .csv</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  {% for role, ts, content, thought in rows %}
+        {% if role == 'assistant' %}
+        {% if thought %}
+          <div class="msg assistant thought">{{ thought|safe }}</div>
+        {% endif %}
+        <div class="msg assistant">
+          {{ content|safe }}
+          <div class="ts">{{ ts }}</div>
+        </div>
+    {% else %}
+        <div class="msg user">
+          {{ content|safe }}
+          <div class="ts">{{ ts }}</div>
+        </div>
+    {% endif %}
+  {% else %}
+    <p style="color:#555;">Start the conversation by typing below …</p>
+  {% endfor %}
+</div>
+</body>
+</html>

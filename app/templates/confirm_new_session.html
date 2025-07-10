@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Start new session?</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{display:flex;align-items:center;justify-content:center;min-height:100vh;
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         background:#f7f8fa;color:#111;}
+    .card{background:#fff;padding:2rem 2.25rem;border-radius:12px;max-width:360px;width:90%;
+          box-shadow:0 4px 10px rgb(0 0 0 / .08);text-align:center;}
+    h2{font-size:1.1rem;margin-bottom:.75rem;}
+    p{font-size:.9rem;color:#555;margin-bottom:1.25rem;}
+    a,button{display:inline-block;margin:.25rem .4rem;padding:.55rem 1.25rem;
+             font-weight:600;border-radius:6px;border:0;cursor:pointer;text-decoration:none;}
+    a{background:#2563eb;color:#fff;}
+    button.start{background:#16a34a;color:#fff;}
+    button.cancel{background:#e5e7eb;color:#111;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Create a new chat session?</h2>
+    <p>You have <strong>{{ msg_count }}</strong> messages in the current one.</p>
+
+    <div>
+      <!-- download opens in same tab; user can hit Back if desired -->
+      <a href="/export">Download transcript</a>
+
+      <!-- POST to actually start -->
+      <form method="POST" action="/new-session/confirm" style="display:inline">
+        <button class="start">Start new session</button>
+      </form>
+
+      <!-- plain link to go back -->
+      <a href="/" class="cancel">Cancel</a>
+    </div>
+  </div>
+</body>
+</html>
