@@ -7,7 +7,7 @@
        LLM_MODEL: "qwen3:1.7b"
        AUTH_USER: "admin"            # <<< set your preferred creds
        AUTH_PASS: "secret123"
-       RATE_LIMIT: "10/minute"       # <<< 10 requests per minute
+       RATE_LIMIT: "10/60"       # <<< 10 requests per minute
      volumes:
        - chat-data:/data
    redis:

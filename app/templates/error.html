@@ -1,0 +1,15 @@
+<!-- app/templates/error.html -->
+<!doctype html>
+<title>{{ code }} – error</title>
+<style>
+  body{font-family:system-ui;background:#f7f8fa;display:flex;
+       align-items:center;justify-content:center;height:100vh;}
+  .card{padding:2rem 3rem;background:#fff;border:1px solid #ddd;
+        border-radius:8px;box-shadow:0 4px 12px rgb(0 0 0 /.05);}
+  h1{margin-bottom:.5rem;font-size:2rem}
+  p{color:#555}
+</style>
+<div class="card">
+  <h1>{{ code }}</h1>
+  <p>{{ detail }}</p>
+</div>
