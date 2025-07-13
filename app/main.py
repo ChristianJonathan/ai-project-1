@@ -1,6 +1,6 @@
 """No-JS AI Assistant – simple polling version (no streaming)."""
 from __future__ import annotations
-import asyncio, csv, datetime as dt, io, json, logging, os, re, secrets, sqlite3, time, uuid
+import asyncio, csv, datetime as dt, io, json, logging, os, re, secrets, sqlite3, time, uuid, tempfile, pathlib, shutil
 
 from app.settings import settings  
 
@@ -9,14 +9,18 @@ from httpx import HTTPStatusError
 from markdown_it import MarkdownIt
 
 from fastapi import (
-    BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
+    BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
 )
+import base64, imghdr, mimetypes
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.concurrency import run_until_first_complete
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
+
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -25,6 +29,9 @@ templates  = Jinja2Templates(directory="app/templates")
 md         = MarkdownIt("commonmark")
 ALLOWED    = set(bleach.sanitizer.ALLOWED_TAGS) | {"p", "pre", "code"}
 THINK_RE   = re.compile(r"<think>(.*?)</think>", re.S | re.I)
+
+TMP_IMG_DIR = "/tmp/ollama_images"
+os.makedirs(TMP_IMG_DIR, exist_ok=True)
 
 # ───────────────────────── DB bootstrap / migration ───────────────────
 def init_db() -> sqlite3.Connection:
@@ -85,9 +92,13 @@ def _export_rows(sid: str) -> tuple[str, io.StringIO]:
           from messages where session_id=? order by id
     """, (sid,)).fetchall()
     if not rows:
-        raise HTTPException(404, "Session not found")
+        return _render_error(request, 404, "Session not found")
 
-    txt = "\n".join(f"{r.upper()}: {c}" for _, r, c, _, _ in rows)
+    def _fmt(ts, role, content, model, _params):
+        if role == "assistant":
+            return f"{role.upper()}({model}): {content}"
+        return f"{role.upper()}: {content}"
+    txt = "\n".join(_fmt(*row) for row in rows)
 
     buf = io.StringIO()
     csv.writer(buf).writerows(
@@ -95,6 +106,11 @@ def _export_rows(sid: str) -> tuple[str, io.StringIO]:
     )
     buf.seek(0)
     return txt, buf
+
+def _model_guard(name: str) -> str:
+    if name not in settings.MODEL_CHOICES:
+        return _render_error(request, 400, f"Unknown model {name!r}")
+    return name
 
 # ───────────────────────── Rate-limit helper ───────────────────────────
 def _rl(spec: str) -> RateLimiter:
@@ -157,8 +173,8 @@ async def build_context(
 async def check_auth(creds: HTTPBasicCredentials = Depends(security)):
     if not (secrets.compare_digest(creds.username, settings.AUTH_USER) and
             secrets.compare_digest(creds.password, settings.AUTH_PASS)):
-        raise HTTPException(
-            401, detail="Invalid credentials",
+        return _render_error(
+            request, 401, detail="Invalid credentials",
             headers={"WWW-Authenticate": "Basic"}
         )
 
@@ -182,15 +198,32 @@ RATE_LIMIT   = _rl(settings.RATE_LIMIT)     # e.g. "10/60"
 STREAM_LIMIT = _rl(settings.STREAM_LIMIT)   # e.g. "20/60"
 
 # ───────────────────────── Background LLM call ────────────────────────
-async def generate_reply(prompt: str, model: str, temp: float, max_tok: int,
-                         row_id: int, sid: str):
+async def generate_reply(
+        prompt:   str,
+        model:    str,
+        temp:     float,
+        max_tok:  int,
+        row_id:   int,
+        sid:      str,
+        img_b64: str | None = None,    # <- this is now a plain string
+):
     
+    # ─── optional image handling ─────────────────────────
+    images_field: list[str] = []
+
     msgs = [
         {"role": "system", "content": settings.SYSTEM_PROMPT},
         *await build_context(sid, prompt,
                              token_budget=4_096,
                              keep_last_n=8),
     ]
+
+    if img_b64:                      # add image to the user turn
+        msgs.append({
+            "role": "user",
+            "content": "",           # Gemma vision ignores this
+            "images": [img_b64],     # Ollama /chat accepts list[str]
+        })
 
     payload = {
         "model": model,
@@ -237,6 +270,20 @@ async def generate_reply(prompt: str, model: str, temp: float, max_tok: int,
              model, json.dumps({"temperature": temp, "max_tok": max_tok})))
         DB.commit()
 
+# ─────────────── helper that just inserts the assistant row ───────────────
+async def _store_assistant_row(
+        sid: str, answer: str, thought: str,
+        model: str, temp: float, max_tok: int
+):
+    async with db_lock:
+        DB.execute("""insert into messages(session_id,ts,role,
+                                           content,thought,model,params)
+                         values (?,?,?,?,?,?,?)""",
+                   (sid, time.time(), "assistant",
+                    answer, thought, model,
+                    json.dumps({"temperature": temp, "max_tok": max_tok})))
+        DB.commit()
+
 # ───────────────────────── Routes – sessions / history ────────────────
 @app.get("/new-session", response_class=HTMLResponse,
          dependencies=[Depends(check_auth), Depends(RATE_LIMIT)])
@@ -280,53 +327,48 @@ def export_csv(sid: str):
 
 # ───────────────────────── Chat history (list & thread) ───────────────
 
-@app.get(
-    "/history",
-    response_class=HTMLResponse,
-    dependencies=[Depends(check_auth), Depends(RATE_LIMIT)],
-)
+@app.get("/history", response_class=HTMLResponse,
+         dependencies=[Depends(check_auth), Depends(RATE_LIMIT)])
 def history(request: Request):
     """
-    Show a list of previous sessions with first-message preview and turn count.
+    Show all sessions, newest first.
     """
-    sessions = DB.execute(
+    rows = DB.execute(
         """
-        SELECT
-            s.id,
-            datetime(s.started_at,'unixepoch','localtime')  AS started,
-            COALESCE((
-                SELECT content FROM messages
-                 WHERE session_id = s.id AND role = 'user'
-                 ORDER BY id LIMIT 1
-            ), '')                                          AS title,
-            COUNT(m.id)                                     AS turns
-        FROM sessions AS s
-        LEFT JOIN messages AS m ON m.session_id = s.id
-        GROUP BY s.id
-        ORDER BY s.started_at DESC
+        SELECT  s.id,
+                datetime(s.started_at,'unixepoch','localtime')          AS started,
+                COALESCE((
+                    SELECT content
+                      FROM messages
+                     WHERE session_id = s.id AND role = 'user'
+                  ORDER BY id LIMIT 1
+                ), '')                                                  AS title,
+                COUNT(m.id)                                             AS turns
+          FROM sessions AS s
+     LEFT JOIN messages  AS m  ON m.session_id = s.id
+      GROUP BY s.id
+      ORDER BY s.started_at DESC
         """
     ).fetchall()
 
     return templates.TemplateResponse(
         "history.html",
-        {"request": request, "sessions": sessions},
+        {
+            "request": request,
+            "sessions": rows,   # each row: (sid, started, title, turns)
+        },
     )
-
-@app.get(
-    "/history/{sid}",
-    response_class=HTMLResponse,
-    dependencies=[Depends(check_auth), Depends(RATE_LIMIT)],
-)
+@app.get("/history/{sid}", response_class=HTMLResponse,
+         dependencies=[Depends(check_auth), Depends(RATE_LIMIT)])
 def history_thread(request: Request, sid: str):
-    """
-    Show a single session transcript (chronological).
-    """
-    rows = DB.execute(
+    """Single session transcript (chronological)."""
+    rows_raw = DB.execute(
         """
         SELECT role,
-               datetime(ts,'unixepoch','localtime') AS ts,
+               datetime(ts,'unixepoch','localtime'),
                content,
-               COALESCE(thought,'')
+               COALESCE(thought,'') AS thought,
+               COALESCE(model,'')   AS model
           FROM messages
          WHERE session_id = ?
       ORDER BY id
@@ -334,17 +376,23 @@ def history_thread(request: Request, sid: str):
         (sid,),
     ).fetchall()
 
-    # get start-time & first user message for header
+    # 🖼️ render Markdown here (same pattern as home())
+    rows = [
+        (role, ts, md_to_html(content), md_to_html(thought), model)
+        for role, ts, content, thought, model in rows_raw
+    ]
+
+    # header info
     started, title = DB.execute(
         """
-        SELECT
-          datetime(started_at,'unixepoch','localtime'),
-          COALESCE((
-             SELECT content FROM messages
-              WHERE session_id = ? AND role = 'user'
-              ORDER BY id LIMIT 1
-          ), '')
-        FROM sessions WHERE id = ?
+        SELECT datetime(started_at,'unixepoch','localtime'),
+               COALESCE((
+                   SELECT content FROM messages
+                    WHERE session_id = ? AND role = 'user'
+                 ORDER BY id LIMIT 1
+               ), '')
+          FROM sessions
+         WHERE id = ?
         """,
         (sid, sid),
     ).fetchone()
@@ -353,14 +401,142 @@ def history_thread(request: Request, sid: str):
         "history_thread.html",
         {
             "request": request,
-            "rows": rows,
+            "rows": rows,          # now contains HTML-ready chunks
             "sid": sid,
             "started": started,
             "title": title,
-            "md_to_html": md_to_html,  # if you want markdown in template
         },
     )
 
+# ───────────────────────── Chat (streaming) via hidden <iframe> ───────────
+@app.post("/chat-stream", dependencies=[Depends(check_auth), Depends(STREAM_LIMIT)])
+async def chat_stream(
+    request: Request,
+    prompt:  str  = Form(...),
+    model:   str  = Form(settings.MODEL_DEFAULT),
+    temp:    float = Form(0.7),
+    max_tok: int  = Form(2000),
+    image: UploadFile | None = File(None), 
+):
+    model = _model_guard(model)
+    sid = get_session(request)
+
+    # ── 0️⃣  persist the uploaded image (if any) ───────────────────────
+    extra_images: list[str] = []                         
+    if image and image.filename:                         
+        head = await image.read(32)
+        await image.seek(0)
+        if imghdr.what(None, head) is None:
+            return _render_error(request, 400, "Uploaded file is not a valid image")
+        fd, tmp_name = tempfile.mkstemp(
+            dir=TMP_IMG_DIR,
+            suffix=pathlib.Path(image.filename).suffix or ".png",
+        )
+        with open(fd, "wb") as f:
+            shutil.copyfileobj(image.file, f)
+        extra_images.append(tmp_name)                    
+
+    # 1) save the USER turn immediately
+    async with db_lock:
+        DB.execute("insert or ignore into sessions(id,started_at) values(?,?)",
+                   (sid, time.time()))
+        DB.execute("""insert into messages(session_id,ts,role,content,model,params)
+                         values (?,?,?,?,?,?)""",
+                   (sid, time.time(), "user", prompt, model,
+                    json.dumps({"temperature": temp, "max_tok": max_tok})))
+        DB.commit()
+
+    # 2) build context and fire Ollama *streaming*
+    msgs = [
+        {"role": "system", "content": settings.SYSTEM_PROMPT},
+        *await build_context(sid, prompt, token_budget=4096, keep_last_n=8),
+    ]
+    if extra_images:                                     # ⬅️ NEW
+        msgs.append({
+            "role": "user",
+            "content": "",
+            "images": extra_images,      # Ollama passes file paths
+        })
+
+    # # ─── optional image handling ───────────────────────────────
+    # if image and image.filename:
+    #     raw_bytes = await image.read()
+    #     # tiny sanity-check – reject non-images
+    #     if imghdr.what(None, raw_bytes) is None:
+    #         raise HTTPException(400, "Uploaded file is not a valid image")
+    #     b64 = base64.b64encode(raw_bytes).decode()
+    #     mime = (
+    #         mimetypes.guess_type(image.filename)[0]
+    #         or "image/png"
+    #     )
+    # # Gemma vision uses OpenAI style: {"type":"image_url","image_url":{"url":"data:<mime>;base64,<data>"}}
+    #     msgs.append(
+    #     {
+    #         "role": "user",
+    #         "content": "",
+    #         "images": [  # 🤖 Ollama /chat supports this field
+    #         f"data:{mime};base64,{b64}"
+    #         ],
+    #     }
+    #     )
+
+    payload = {
+        "model": model,
+        "stream": True,
+        "options": {"temperature": temp, "num_predict": max_tok},
+        "messages": msgs,
+    }
+
+    async def _gen():
+        collected: list[str] = []
+        yield (
+        "<!doctype html><meta charset=utf-8>"
+        "<body style='font-family:system-ui'>"
+        )
+        # 1️⃣  Stream tokens from Ollama → browser
+        async with httpx.AsyncClient(timeout=None) as cli:
+            async with cli.stream("POST", settings.LLM_URL, json=payload) as r:
+                async for line in r.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk = (
+                        # ① OpenAI-style delta
+                        data.get("choices", [{}])[0].get("delta", {}).get("content")
+                        # ② Ollama /completion streaming
+                        or data.get("response")
+                        # ③ Ollama /chat streaming  ← NEW
+                        or (data.get("message") or {}).get("content")
+                        # ④ Fallbacks (GGML etc.)
+                        or data.get("text")
+                        or ""
+                    )
+                    if chunk:
+                        collected.append(chunk)
+                        yield bleach.clean(chunk).replace("\n", "<br>")
+        yield "</body></html>"     # 2️⃣  close the tiny HTML doc
+
+        # 3️⃣  Build answer + schedule DB write **in background**
+        raw = "".join(collected)
+        m   = THINK_RE.search(raw)
+        thought = m.group(1).strip() if m else ""
+        answer  = raw[m.end():].lstrip() if m else raw
+
+        async def _store_and_clean():                    
+            await _store_assistant_row(
+                sid, answer, thought, model, temp, max_tok
+            )
+            for path in extra_images:
+                try: pathlib.Path(path).unlink()
+                except Exception: pass
+
+        asyncio.create_task(_store_and_clean())
+
+    return StreamingResponse(_gen(), media_type="text/html")
+    
 # ───────────────────────── Chat (polling) flow ────────────────────────
 @app.post("/chat", dependencies=[Depends(check_auth), Depends(RATE_LIMIT)])
 async def chat(
@@ -369,9 +545,16 @@ async def chat(
     prompt: str  = Form(...),
     model:  str  = Form(settings.MODEL_DEFAULT),
     temp:   float= Form(0.7),
-    max_tok:int  = Form(1000),
+    max_tok:int  = Form(2000),
+    image: UploadFile | None = File(None)
 ):
+    
+    if image and image.filename:                       
+        return _render_error(request, 400, "Image uploads require /chat-stream")
+    
+    model = _model_guard(model)
     sid = get_session(request)
+
     async with db_lock:
         DB.execute("insert or ignore into sessions(id,started_at) values(?,?)",
                    (sid, time.time()))
@@ -381,7 +564,7 @@ async def chat(
         """,(sid, time.time(), "user", prompt, model,
              json.dumps({"temperature": temp, "max_tok": max_tok}))
         ).lastrowid
-        DB.commit()
+        DB.commit()    
 
     background_tasks.add_task(generate_reply,
                               prompt, model, temp, max_tok, row_id, sid)
@@ -400,26 +583,62 @@ async def wait(request: Request, msg_id: int):
             {"request": request, "refresh": True, "msg_id": msg_id})
     return RedirectResponse("/", 303)
 
+# ───────────────────────── Exception handling ─────────────────────────────
+@app.exception_handler(StarletteHTTPException)
+async def http_exc(request: Request, exc: StarletteHTTPException):
+    # FastAPI already turned it into StarletteHTTPException
+    # -> re-use our nicer template
+    return _render_error(request, exc.status_code, exc.detail)
+
+@app.exception_handler(Exception)
+async def unhandled_exc(request: Request, exc: Exception):
+    logging.exception("UNCAUGHT ERROR")
+    return _render_error(request, 500, "Internal server error")
+
 # ───────────────────────── Home page ──────────────────────────────────
 @app.get("/", response_class=HTMLResponse,
          dependencies=[Depends(check_auth), Depends(RATE_LIMIT)])
 def home(request: Request):
     sid = get_session(request)
-    rows_raw = DB.execute("""
-        select role,
-               datetime(ts,'unixepoch','localtime'),
-               content,
-               coalesce(thought,'')
-          from messages
-         where session_id=?
-      order by id
-    """,(sid,)).fetchall()
 
-    rows = [(r, ts, md_to_html(c), md_to_html(t)) for r, ts, c, t in rows_raw]
-    return templates.TemplateResponse("index.html",
-        {"request": request,
-         "rows": rows,
-         "models": [settings.MODEL_DEFAULT],
-         "sid": sid,
-         }
-    )  
+    # 1️⃣  fetch RAW ts (epoch), do NOT call datetime(...) in SQL
+    rows_raw = DB.execute(
+        """
+        SELECT role,
+               ts,                       -- ← raw float
+               content,
+               COALESCE(thought,'') AS thought,
+               COALESCE(model ,'')  AS model
+          FROM messages
+         WHERE session_id = ?
+      ORDER BY id
+        """,
+        (sid,),
+    ).fetchall()
+
+    # 2️⃣  convert ts → local string & build tuples for the template
+    def _fmt_epoch(epoch: float) -> str:
+        return dt.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+
+    rows = [
+        (role,
+         _fmt_epoch(ts),                # formatted timestamp
+         md_to_html(content),
+         md_to_html(thought),
+         model)
+        for role, ts, content, thought, model in rows_raw
+    ]
+
+    # 3️⃣  model picker
+    models_list = [settings.MODEL_DEFAULT, "gemma3:4b"]
+
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "rows": rows,
+            "models": models_list,
+            "sid": sid,
+        },
+    )
+

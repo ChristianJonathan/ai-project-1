@@ -74,7 +74,6 @@ button{
     <a href="/">Chat</a>
     <a href="/new-session">New&nbsp;session</a>
     <a href="/history">History</a>
-    {# export links need the current session id #}
     <a href="/export/{{ sid }}">.txt</a>
     <a href="/export.csv/{{ sid }}">.csv</a>
   </nav>
@@ -82,28 +81,39 @@ button{
 
 <!-- scrollable transcript -->
 <div id="scroll">
-  {% for role, ts, html, thought in rows %}
+  {%- for role, ts, html, thought, model in rows %}
     {% if role == "user" %}
       <div class="bubble user">
-        {{ html|safe }}<time>{{ ts }}</time>
+        {{ html|safe }}
+        <time>{{ ts }}</time>
       </div>
     {% else %}
       <div class="bubble assistant">
-        {% if thought %}<div class="thought">{{ thought|safe }}</div>{% endif %}
-        {{ html|safe }}<time>{{ ts }}</time>
+        {# model badge – shown only if we have a model string #}
+        {% if model %}
+          <span class="model-tag">{{ model }}</span>
+        {% endif %}
+        {% if thought %}
+          <div class="thought">{{ thought|safe }}</div>
+        {% endif %}
+        {{ html|safe }}
+        <time>{{ ts }}</time>
       </div>
     {% endif %}
-  {% endfor %}
+  {%- endfor %}
 </div>
 
 <!-- composer -->
-<form action="/chat" method="post">
+<!-- <form action="/chat-stream" method="post" target="streamframe" enctype="multipart/form-data">
+<iframe name="streamframe" class="streamframe" title="LLM stream"></iframe> -->
+<form action="/chat" method="post" enctype="multipart/form-data">
   <div class="controls">
+
     <label>Model
       <select name="model">
-        {% for m in models %}
-          <option value="{{ m }}">{{ m }}</option>
-        {% endfor %}
+        {%- for m in models %}
+          <option value="{{ m }}" {% if loop.first %}selected{% endif %}>{{ m }}</option>
+        {%- endfor %}
       </select>
     </label>
 
@@ -115,6 +125,14 @@ button{
       <input name="max_tok" type="number" min="16" max="4096" value="1000">
     </label>
   </div>
+
+  <!-- <label style="font-size:.875rem">
+    Attach image
+    <input type="file"
+          name="image"
+          accept="image/*"
+          style="display:block;margin-top:.25rem;">
+  </label> -->
 
   <textarea name="prompt"
             placeholder="Type your question here…"

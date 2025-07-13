@@ -10,3 +10,4 @@ main   { max-width:60rem; margin:1rem auto; padding:0 1rem; }
 .chat-assistant { background:#f0fdf4; padding:.5rem 1rem; border-radius:.5rem;}
 pre.think       { background:#fef9c3; padding:.5rem 1rem; border-radius:.5rem;
                   font-size:.875rem; white-space:pre-wrap;}
+.model-tag{font-size:.70rem;font-weight:600;background:#d4d4d8;color:#374151;padding:1px 6px;border-radius:6px;margin-right:6px;}

@@ -36,23 +36,15 @@
 </header>
 
 <div class="wrap">
-  {% for role, ts, content, thought in rows %}
-        {% if role == 'assistant' %}
-        {% if thought %}
-          <div class="msg assistant thought">{{ thought|safe }}</div>
-        {% endif %}
-        <div class="msg assistant">
-          {{ content|safe }}
-          <div class="ts">{{ ts }}</div>
-        </div>
-    {% else %}
-        <div class="msg user">
-          {{ content|safe }}
-          <div class="ts">{{ ts }}</div>
-        </div>
-    {% endif %}
-  {% else %}
-    <p style="color:#555;">Start the conversation by typing below …</p>
+  {% for role, ts, content, thought, model in rows %}
+    <div class="bubble {{ role }}">
+      {% if role == "assistant" %}
+        <span class="model-tag">{{ model }}</span>
+      {% endif %}
+      {% if thought %}<div class="thought">{{ thought|safe }}</div>{% endif %}
+      {{ content|safe }}
+      <time>{{ ts }}</time>
+    </div>
   {% endfor %}
 </div>
 </body>

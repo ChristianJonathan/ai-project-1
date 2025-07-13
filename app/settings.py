@@ -9,6 +9,10 @@ def _env(key: str, default: str | None = None) -> str:
         raise RuntimeError(f"Missing required env var {key!r}")
     return val
 
+def _csv(key: str, default: str) -> list[str]:
+    """Read an env-var that contains a comma-separated list."""
+    return [s.strip() for s in _env(key, default).split(",") if s.strip()]
+
 class Settings:
     # ── core paths ────────────────────────────────────────────────────
     DB_PATH:     str = _env("DB_PATH", "/data/chat.db")
@@ -17,7 +21,13 @@ class Settings:
     # ── LLM / Ollama ─────────────────────────────────────────────────
     LLM_URL:     str = _env("LLM_URL",
                             "http://host.docker.internal:11434/api/chat")
-    MODEL_DEFAULT: str = _env("MODEL_DEFAULT", "qwen3:1.7b")
+    
+    # ── Local models ────────────────────────────────────────────────
+    MODEL_CHOICES: list[str] = _csv(        # <── NEW
+        "MODEL_CHOICES",
+        "qwen3:1.7b,gemma3:4b"              # default list
+    )
+    MODEL_DEFAULT: str = MODEL_CHOICES[0]   # first one = default    
 
     # ── Auth / rate-limit ────────────────────────────────────────────
     AUTH_USER:   str = _env("AUTH_USER", "admin")

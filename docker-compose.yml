@@ -4,14 +4,25 @@
      ports: ["8000:8000"]
      environment:
        LLM_URL: "http://host.docker.internal:11434/api/chat"
-       LLM_MODEL: "qwen3:1.7b"
+       MODEL_CHOICES: "qwen3:1.7b,gemma3:4b"
        AUTH_USER: "admin"            # <<< set your preferred creds
        AUTH_PASS: "secret123"
        RATE_LIMIT: "10/60"       # <<< 10 requests per minute
      volumes:
-       - chat-data:/data
+       - chat-data:/data  
+   test:
+      build: .
+      command: >
+        sh -c "pip install -r requirements-dev.txt && pytest -q"
+      volumes:
+        - .:/app          
+      environment:
+        PYTHONPATH: /app  
+      profiles: ["test"]    
    redis:
      image: redis:7-alpine
      ports: ["6379:6379"]            # internal only
+
  volumes:
    chat-data:
+   
