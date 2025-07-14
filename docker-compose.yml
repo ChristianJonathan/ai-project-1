@@ -22,7 +22,9 @@
    redis:
      image: redis:7-alpine
      ports: ["6379:6379"]            # internal only
+     volumes: 
+      - redis-data:/data
 
  volumes:
    chat-data:
-   
+   redis-data:

@@ -9,7 +9,7 @@ from httpx import HTTPStatusError
 from markdown_it import MarkdownIt
 
 from fastapi import (
-    BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File
+    BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile, File, Response
 )
 import base64, imghdr, mimetypes
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -24,7 +24,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-security   = HTTPBasic()
+# security   = HTTPBasic()
+security   = HTTPBasic(auto_error=False)
 templates  = Jinja2Templates(directory="app/templates")
 md         = MarkdownIt("commonmark")
 ALLOWED    = set(bleach.sanitizer.ALLOWED_TAGS) | {"p", "pre", "code"}
@@ -170,12 +171,24 @@ async def build_context(
     return context
 
 # ───────────────────────── Auth & startup ─────────────────────────────
-async def check_auth(creds: HTTPBasicCredentials = Depends(security)):
+# async def check_auth(request: Request, creds: HTTPBasicCredentials = Depends(security)):
+async def check_auth(request: Request, creds: HTTPBasicCredentials | None = Depends(security)):
+
+    # 1) No Authorization header at all
+    if creds is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    # 2) Header sent but bad credentials
     if not (secrets.compare_digest(creds.username, settings.AUTH_USER) and
             secrets.compare_digest(creds.password, settings.AUTH_PASS)):
-        return _render_error(
-            request, 401, detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"}
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
         )
 
 async def _startup():
@@ -588,6 +601,11 @@ async def wait(request: Request, msg_id: int):
 async def http_exc(request: Request, exc: StarletteHTTPException):
     # FastAPI already turned it into StarletteHTTPException
     # -> re-use our nicer template
+    # return _render_error(request, exc.status_code, exc.detail)
+    if exc.status_code == 401:
+        # Return a bare 401 + Basic challenge so the browser pops up
+        return Response(status_code=401, headers=exc.headers)
+    # All other errors render your nice HTML page
     return _render_error(request, exc.status_code, exc.detail)
 
 @app.exception_handler(Exception)

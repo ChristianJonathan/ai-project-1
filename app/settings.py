@@ -31,15 +31,15 @@ class Settings:
 
     # ── Auth / rate-limit ────────────────────────────────────────────
     AUTH_USER:   str = _env("AUTH_USER", "admin")
-    AUTH_PASS:   str = _env("AUTH_PASS", "admin")
+    AUTH_PASS:   str = _env("AUTH_PASS", "secret123")
     RATE_LIMIT:  str = _env("RATE_LIMIT", "10/60")          # req per seconds
     STREAM_LIMIT:str = _env("STREAM_LIMIT", "20/60")
 
     # ── Prompt tuning ────────────────────────────────────────────────
     SYSTEM_PROMPT: str = (
         "You are a helpful assistant. "
-        "Think step-by-step **in ≤ 100 tokens**, enclosed in <think>…</think>. "
-        "Then answer the user clearly."
+        "Think step-by-step **strictly using less than 200 tokens**, enclosed in <think>…</think>. "
+        "Then, using the remaining tokens, answer the user clearly."
     )
 
 settings = Settings()
